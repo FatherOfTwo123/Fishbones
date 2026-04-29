@@ -125,6 +125,38 @@ const rwx = \
     FileAccess.UNIX_WRITE_OWNER |\
     FileAccess.UNIX_EXECUTE_OWNER
 
+func get_file_size(path: String) -> int:
+    var file := FileAccess.open(path, FileAccess.READ)
+    if file == null:
+        return -1
+    var size := file.get_length()
+    file.close()
+    return size
+
+func should_sync_embedded_file(from: String, to: String, current_exe_mod_time: int) -> bool:
+    if !FileAccess.file_exists(to):
+        return true
+
+    var extracted_file_mod_time := FileAccess.get_modified_time(to)
+    if current_exe_mod_time > extracted_file_mod_time:
+        return true
+
+    return get_file_size(from) != get_file_size(to)
+
+func sync_embedded_file(from: String, to: String, current_exe_mod_time: int) -> void:
+    if !should_sync_embedded_file(from, to, current_exe_mod_time):
+        return
+
+    if FileAccess.file_exists(to):
+        var remove_err := DirAccess.remove_absolute(to)
+        assert(remove_err in [ OK, ERR_DOES_NOT_EXIST ])
+
+    var copy_err := DirAccess.copy_absolute(from, to)
+    assert(copy_err == OK)
+
+    if to.get_extension() == "exe":
+        FileAccess.set_unix_permissions(to, rwx)
+
 func _ready() -> void:
     var err: Error
 
@@ -144,7 +176,7 @@ func _ready() -> void:
     err = DirAccess.make_dir_absolute(fb_dir); assert(err in [ OK, ERR_ALREADY_EXISTS ])
 
     #var copied_exe := fb_dir.path_join('Fishbones.exe')
-    #var current_exe_mod_time := FileAccess.get_modified_time(current_exe)
+    var current_exe_mod_time := FileAccess.get_modified_time(current_exe)
     #var copied_exe_mod_time := FileAccess.get_modified_time(copied_exe)
     #if current_exe_mod_time > copied_exe_mod_time:
     #    err = DirAccess.copy_absolute(current_exe, copied_exe); assert(err == OK)
@@ -156,14 +188,11 @@ func _ready() -> void:
     var extracted_exe := downloads.path_join(embedded_exe.get_file())
     for embedded_file in embedded_libs:
         var extracted_file := downloads.path_join(embedded_file.get_file())
-        #var embedded_file_mod_time := FileAccess.get_modified_time(embedded_file)
-        #var extracted_file_mod_time := FileAccess.get_modified_time(extracted_file)
-        #print(embedded_file.get_file(), ' ', embedded_file_mod_time, ' vs ', extracted_file_mod_time)
-        #if current_exe_mod_time > extracted_file_mod_time:
-        if !FileAccess.file_exists(extracted_file):
-            err = DirAccess.copy_absolute(embedded_file, extracted_file); #assert(err == OK)
-            if extracted_file.get_extension() == "exe":
-                err = FileAccess.set_unix_permissions(extracted_file, rwx); #assert(err == OK)
+        sync_embedded_file(embedded_file, extracted_file, current_exe_mod_time)
+
+    for embedded_file in embedded_files:
+        var extracted_file := downloads.path_join(embedded_file.get_file())
+        sync_embedded_file(embedded_file, extracted_file, current_exe_mod_time)
 
     exe_args.append_array([ extracted_js ])
     exe_args.append_array(OS.get_cmdline_user_args())
@@ -271,6 +300,12 @@ func _init() -> void:
             err = ERR_FILE_NO_PERMISSION
             reject(id, err, error_string(err))
             return
+
+        if FileAccess.file_exists(to):
+            err = DirAccess.remove_absolute(to)
+            if err != OK and err != ERR_DOES_NOT_EXIST:
+                reject(id, err, error_string(err))
+                return
 
         err = DirAccess.copy_absolute(from, to)
         if err != OK:

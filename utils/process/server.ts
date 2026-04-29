@@ -1,7 +1,7 @@
 import path from 'node:path'
-import { sdkPkg } from '../data/packages'
+import { gc420Pkg, sdkPkg } from '../data/packages'
 import { getFreePort, killSubprocess, spawn, startProcess, type ChildProcess } from './process'
-import { servers, type ServerVersion } from '../data/constants/client-server-combinations'
+import { KnownServers, servers, type ServerVersion } from '../data/constants/client-server-combinations'
 import { fs_writeFile } from '../data/fs'
 import type { GameInfo } from '../../game/game-info'
 import type { AbortOptions } from '@libp2p/interface'
@@ -14,6 +14,21 @@ export function getRunningServerPort(){
     return serverSubprocess?.port
 }
 
+async function syncTestGroundsGameServerSettings(serverVersion: ServerVersion, opts: Required<AbortOptions>){
+    if(process.platform !== 'win32' || serverVersion !== KnownServers.TestGrounds)
+        return
+
+    const gsPkg = servers[serverVersion]!
+    const gsSettings = path.join(gsPkg.infoDir, 'GameServerSettings.json')
+
+    await fs_writeFile(gsSettings, JSON.stringify({
+        clientLocation: gc420Pkg.dir,
+        clientLaunchScriptPath: '',
+        winePrefix: '',
+        autoStartClient: false,
+    }, null, 4), { ...opts, encoding: 'utf8', rethrow: true })
+}
+
 export async function launchServer(serverVersion: ServerVersion, info: GameInfo, opts: Required<AbortOptions>, port = 0){
     const gsPkg = servers[serverVersion]!
 
@@ -23,6 +38,7 @@ export async function launchServer(serverVersion: ServerVersion, info: GameInfo,
     const gsInfoRel = path.relative(gsPkg.dllDir, gsInfo)
     
     await fs_writeFile(gsInfo, JSON.stringify(info, null, 4), { ...opts, encoding: 'utf8', rethrow: true })
+    await syncTestGroundsGameServerSettings(serverVersion, opts)
     
     if(port === 0) port = await getFreePort() //HACK:
 
@@ -38,6 +54,7 @@ export async function launchServer(serverVersion: ServerVersion, info: GameInfo,
     
     await startProcess(LOG_PREFIX, serverSubprocess, 'stdout', (chunk) => {
         return /\b(?:Game)?Server (?:is )?ready\b/.test(chunk)
+            || /\bGame is ready\b/.test(chunk)
         //return chunk.includes("Server is ready, clients can now connect")
         //    || chunk.includes("GameServer ready for clients to connect on Port")
         /*
